@@ -1,0 +1,739 @@
+
+================================================================================
+FILE: README.md
+================================================================================
+
+# Assignment 4 - MySQL
+
+## What you need
+- Node.js
+- MySQL Server
+- A code editor such as VS Code
+
+## How to run the project
+1. Install the packages first:
+   ```bash
+   npm install
+   ```
+2. Make a copy of `.env.example` and name it `.env`.
+3. Open `.env` and write your MySQL password.
+4. Run the project:
+   ```bash
+   npm start
+   ```
+5. Open `http://localhost:3000`.
+
+When you start the app, it creates the `store_db` database and its three tables if they do not already exist.
+
+## API endpoints
+
+### Products
+- `POST /api/products` - create a product
+- `GET /api/products` - get all products
+- `GET /api/products/:id` - get one product
+- `PUT /api/products/:id` - update a product
+- `DELETE /api/products/:id` - delete a product
+- `GET /api/products/:id/sales` - sales for a product
+
+### Suppliers
+- `POST /api/suppliers` - create a supplier
+- `GET /api/suppliers` - get all suppliers
+- `PUT /api/suppliers/:id` - update a supplier
+- `DELETE /api/suppliers/:id` - delete a supplier
+
+### Sales
+- `POST /api/sales` - record a sale
+- `GET /api/sales` - get all sales
+
+### Database changes
+- `POST /api/admin/products/category` - add Category column
+- `DELETE /api/admin/products/category` - remove Category column
+- `PATCH /api/admin/suppliers/contact-number-type` - change ContactNumber to VARCHAR(15)
+- `PATCH /api/admin/products/product-name-not-null` - make ProductName NOT NULL
+
+### Required data and changes
+- `POST /api/admin/seed-data` - insert FreshFoods, Milk, Bread, Eggs, and the Milk sale
+- `PATCH /api/admin/products/bread-price` - update Bread price to 25.00
+- `DELETE /api/admin/products/eggs` - delete Eggs
+
+### Reports
+- `GET /api/reports/total-quantity-sold`
+- `GET /api/reports/highest-stock`
+- `GET /api/reports/suppliers-starting-f`
+- `GET /api/reports/products-never-sold`
+- `GET /api/reports/sales-details`
+
+## Example request bodies
+
+Create a supplier:
+```json
+{
+  "SupplierName": "FreshFoods",
+  "ContactNumber": "01001234567"
+}
+```
+
+Create a product:
+```json
+{
+  "ProductName": "Milk",
+  "Price": 15.00,
+  "StockQuantity": 50,
+  "SupplierID": 1
+}
+```
+
+Record a sale:
+```json
+{
+  "ProductID": 1,
+  "QuantitySold": 2,
+  "SaleDate": "2025-05-20"
+}
+```
+
+## Other assignment parts
+- `sql/musicana_schema.sql` maps the Musicana ERD from Part 1.
+- `sql/part2_mapping.sql` maps the User/Product ERD from Part 2.
+- `sql/permissions.sql` covers the `store_manager` permissions in Questions 14-16.
+- `bonus.txt` contains the LeetCode SQL solution for the bonus question.
+
+## Notes
+- Run the required seed endpoint before updating Bread or deleting Eggs.
+- The SQL permissions script uses a placeholder password. Change it before running.
+- This is for the assignment. Do not make the admin endpoints public without adding authentication first.
+
+
+================================================================================
+FILE: package.json
+================================================================================
+
+{
+  "name": "assignment4-mysql",
+  "version": "1.0.0",
+  "description": "Assignment 4 - Node.js, Express.js and MySQL REST API",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node --watch app.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mysql2": "^3.12.0"
+  }
+}
+
+
+================================================================================
+FILE: .env.example
+================================================================================
+
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_mysql_password
+DB_NAME=store_db
+PORT=3000
+
+
+================================================================================
+FILE: app.js
+================================================================================
+
+require("dotenv").config();
+
+const express = require("express");
+const mysql = require("mysql2/promise");
+
+const app = express();
+app.use(express.json());
+
+const DB_NAME = process.env.DB_NAME || "store_db";
+let pool;
+
+// Create the database, then connect to it.
+async function connectDatabase() {
+    const connection = await mysql.createConnection({
+        host: process.env.DB_HOST || "localhost",
+        port: Number(process.env.DB_PORT || 3306),
+        user: process.env.DB_USER || "root",
+        password: process.env.DB_PASSWORD || ""
+    });
+
+    await connection.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\``);
+    await connection.end();
+
+    pool = mysql.createPool({
+        host: process.env.DB_HOST || "localhost",
+        port: Number(process.env.DB_PORT || 3306),
+        user: process.env.DB_USER || "root",
+        password: process.env.DB_PASSWORD || "",
+        database: DB_NAME,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0
+    });
+
+    await createTables();
+    console.log("Database connected and tables are ready.");
+}
+
+async function createTables() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS Suppliers (
+            SupplierID INT AUTO_INCREMENT PRIMARY KEY,
+            SupplierName VARCHAR(100) NOT NULL,
+            ContactNumber VARCHAR(15)
+        )
+    `);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS Products (
+            ProductID INT AUTO_INCREMENT PRIMARY KEY,
+            ProductName VARCHAR(100),
+            Price DECIMAL(10,2) NOT NULL,
+            StockQuantity INT NOT NULL DEFAULT 0,
+            SupplierID INT NOT NULL,
+            CONSTRAINT fk_products_supplier
+                FOREIGN KEY (SupplierID) REFERENCES Suppliers(SupplierID)
+        )
+    `);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS Sales (
+            SaleID INT AUTO_INCREMENT PRIMARY KEY,
+            ProductID INT NOT NULL,
+            QuantitySold INT NOT NULL,
+            SaleDate DATE NOT NULL,
+            CONSTRAINT fk_sales_product
+                FOREIGN KEY (ProductID) REFERENCES Products(ProductID)
+        )
+    `);
+}
+
+function asyncHandler(fn) {
+    return function (req, res, next) {
+        Promise.resolve(fn(req, res, next)).catch(next);
+    };
+}
+
+app.get("/", (req, res) => {
+    res.json({ message: "Store REST API is running." });
+});
+
+// ==================== PRODUCTS CRUD ====================
+
+// Create a product
+app.post("/api/products", asyncHandler(async (req, res) => {
+    const { ProductName, Price, StockQuantity, SupplierID } = req.body;
+
+    if (Price === undefined || StockQuantity === undefined || !SupplierID) {
+        return res.status(400).json({
+            message: "Price, StockQuantity and SupplierID are required."
+        });
+    }
+
+    const [result] = await pool.query(
+        `INSERT INTO Products (ProductName, Price, StockQuantity, SupplierID)
+         VALUES (?, ?, ?, ?)`,
+        [ProductName ?? null, Price, StockQuantity, SupplierID]
+    );
+
+    res.status(201).json({
+        message: "Product created successfully.",
+        ProductID: result.insertId
+    });
+}));
+
+// Get all products
+app.get("/api/products", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query("SELECT * FROM Products");
+    res.json(rows);
+}));
+
+// Get one product using its ID
+app.get("/api/products/:id", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query(
+        "SELECT * FROM Products WHERE ProductID = ?",
+        [req.params.id]
+    );
+
+    if (rows.length === 0) {
+        return res.status(404).json({ message: "Product not found." });
+    }
+
+    res.json(rows[0]);
+}));
+
+// Edit a product
+app.put("/api/products/:id", asyncHandler(async (req, res) => {
+    const { ProductName, Price, StockQuantity, SupplierID } = req.body;
+
+    const [result] = await pool.query(
+        `UPDATE Products
+         SET ProductName = COALESCE(?, ProductName),
+             Price = COALESCE(?, Price),
+             StockQuantity = COALESCE(?, StockQuantity),
+             SupplierID = COALESCE(?, SupplierID)
+         WHERE ProductID = ?`,
+        [
+            ProductName ?? null,
+            Price ?? null,
+            StockQuantity ?? null,
+            SupplierID ?? null,
+            req.params.id
+        ]
+    );
+
+    if (result.affectedRows === 0) {
+        return res.status(404).json({ message: "Product not found." });
+    }
+
+    res.json({ message: "Product updated successfully." });
+}));
+
+// Delete a product
+app.delete("/api/products/:id", asyncHandler(async (req, res) => {
+    const [result] = await pool.query(
+        "DELETE FROM Products WHERE ProductID = ?",
+        [req.params.id]
+    );
+
+    if (result.affectedRows === 0) {
+        return res.status(404).json({ message: "Product not found." });
+    }
+
+    res.json({ message: "Product deleted successfully." });
+}));
+
+// ==================== SUPPLIERS CRUD ====================
+
+// Create a supplier
+app.post("/api/suppliers", asyncHandler(async (req, res) => {
+    const { SupplierName, ContactNumber } = req.body;
+
+    if (!SupplierName) {
+        return res.status(400).json({ message: "SupplierName is required." });
+    }
+
+    const [result] = await pool.query(
+        "INSERT INTO Suppliers (SupplierName, ContactNumber) VALUES (?, ?)",
+        [SupplierName, ContactNumber ?? null]
+    );
+
+    res.status(201).json({
+        message: "Supplier created successfully.",
+        SupplierID: result.insertId
+    });
+}));
+
+// Get all suppliers
+app.get("/api/suppliers", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query("SELECT * FROM Suppliers");
+    res.json(rows);
+}));
+
+// Edit supplier information
+app.put("/api/suppliers/:id", asyncHandler(async (req, res) => {
+    const { SupplierName, ContactNumber } = req.body;
+
+    const [result] = await pool.query(
+        `UPDATE Suppliers
+         SET SupplierName = COALESCE(?, SupplierName),
+             ContactNumber = COALESCE(?, ContactNumber)
+         WHERE SupplierID = ?`,
+        [SupplierName ?? null, ContactNumber ?? null, req.params.id]
+    );
+
+    if (result.affectedRows === 0) {
+        return res.status(404).json({ message: "Supplier not found." });
+    }
+
+    res.json({ message: "Supplier updated successfully." });
+}));
+
+// Delete a supplier
+app.delete("/api/suppliers/:id", asyncHandler(async (req, res) => {
+    const [result] = await pool.query(
+        "DELETE FROM Suppliers WHERE SupplierID = ?",
+        [req.params.id]
+    );
+
+    if (result.affectedRows === 0) {
+        return res.status(404).json({ message: "Supplier not found." });
+    }
+
+    res.json({ message: "Supplier deleted successfully." });
+}));
+
+// ==================== SALES ====================
+
+// Add a sale
+app.post("/api/sales", asyncHandler(async (req, res) => {
+    const { ProductID, QuantitySold, SaleDate } = req.body;
+
+    if (!ProductID || !QuantitySold || !SaleDate) {
+        return res.status(400).json({
+            message: "ProductID, QuantitySold and SaleDate are required."
+        });
+    }
+
+    const [result] = await pool.query(
+        "INSERT INTO Sales (ProductID, QuantitySold, SaleDate) VALUES (?, ?, ?)",
+        [ProductID, QuantitySold, SaleDate]
+    );
+
+    res.status(201).json({
+        message: "Sale recorded successfully.",
+        SaleID: result.insertId
+    });
+}));
+
+// Get all sales
+app.get("/api/sales", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query("SELECT * FROM Sales");
+    res.json(rows);
+}));
+
+// Get sales for one product
+app.get("/api/products/:id/sales", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query(
+        "SELECT * FROM Sales WHERE ProductID = ?",
+        [req.params.id]
+    );
+
+    res.json(rows);
+}));
+
+// ==================== DATABASE MODIFICATIONS ====================
+
+// Add the Category column
+app.post("/api/admin/products/category", asyncHandler(async (req, res) => {
+    await pool.query("ALTER TABLE Products ADD COLUMN Category VARCHAR(100)");
+    res.json({ message: "Category column added." });
+}));
+
+// Remove the Category column
+app.delete("/api/admin/products/category", asyncHandler(async (req, res) => {
+    await pool.query("ALTER TABLE Products DROP COLUMN Category");
+    res.json({ message: "Category column removed." });
+}));
+
+// Change ContactNumber to VARCHAR(15)
+app.patch("/api/admin/suppliers/contact-number-type", asyncHandler(async (req, res) => {
+    await pool.query(
+        "ALTER TABLE Suppliers MODIFY ContactNumber VARCHAR(15)"
+    );
+    res.json({ message: "ContactNumber changed to VARCHAR(15)." });
+}));
+
+// Make ProductName required
+app.patch("/api/admin/products/product-name-not-null", asyncHandler(async (req, res) => {
+    await pool.query(
+        "ALTER TABLE Products MODIFY ProductName VARCHAR(100) NOT NULL"
+    );
+    res.json({ message: "ProductName is now NOT NULL." });
+}));
+
+// ==================== REQUIRED DATA ====================
+
+// Add the supplier, products, and the Milk sale from the assignment
+app.post("/api/admin/seed-data", asyncHandler(async (req, res) => {
+    const connection = await pool.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        let [suppliers] = await connection.query(
+            "SELECT SupplierID FROM Suppliers WHERE SupplierName = ? LIMIT 1",
+            ["FreshFoods"]
+        );
+
+        let supplierID;
+        if (suppliers.length > 0) {
+            supplierID = suppliers[0].SupplierID;
+        } else {
+            const [supplierResult] = await connection.query(
+                "INSERT INTO Suppliers (SupplierName, ContactNumber) VALUES (?, ?)",
+                ["FreshFoods", "01001234567"]
+            );
+            supplierID = supplierResult.insertId;
+        }
+
+        const products = [
+            ["Milk", 15.00, 50],
+            ["Bread", 10.00, 30],
+            ["Eggs", 20.00, 40]
+        ];
+
+        const productIDs = {};
+
+        for (const item of products) {
+            const [existing] = await connection.query(
+                "SELECT ProductID FROM Products WHERE ProductName = ? LIMIT 1",
+                [item[0]]
+            );
+
+            if (existing.length > 0) {
+                productIDs[item[0]] = existing[0].ProductID;
+            } else {
+                const [productResult] = await connection.query(
+                    `INSERT INTO Products
+                     (ProductName, Price, StockQuantity, SupplierID)
+                     VALUES (?, ?, ?, ?)`,
+                    [item[0], item[1], item[2], supplierID]
+                );
+                productIDs[item[0]] = productResult.insertId;
+            }
+        }
+
+        const [sales] = await connection.query(
+            "SELECT SaleID FROM Sales WHERE ProductID = ? AND SaleDate = ? AND QuantitySold = ? LIMIT 1",
+            [productIDs.Milk, "2025-05-20", 2]
+        );
+
+        if (sales.length === 0) {
+            await connection.query(
+                "INSERT INTO Sales (ProductID, QuantitySold, SaleDate) VALUES (?, ?, ?)",
+                [productIDs.Milk, 2, "2025-05-20"]
+            );
+        }
+
+        await connection.commit();
+        res.json({ message: "Required supplier, products and sale are ready." });
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
+    }
+}));
+
+// Change Bread's price to 25.00
+app.patch("/api/admin/products/bread-price", asyncHandler(async (req, res) => {
+    const [result] = await pool.query(
+        "UPDATE Products SET Price = 25.00 WHERE ProductName = ?",
+        ["Bread"]
+    );
+
+    if (result.affectedRows === 0) {
+        return res.status(404).json({ message: "Bread not found. Run seed-data first." });
+    }
+
+    res.json({ message: "Bread price updated to 25.00." });
+}));
+
+// Delete Eggs
+app.delete("/api/admin/products/eggs", asyncHandler(async (req, res) => {
+    const [result] = await pool.query(
+        "DELETE FROM Products WHERE ProductName = ?",
+        ["Eggs"]
+    );
+
+    if (result.affectedRows === 0) {
+        return res.status(404).json({ message: "Eggs not found." });
+    }
+
+    res.json({ message: "Eggs deleted successfully." });
+}));
+
+// ==================== REPORTING ENDPOINTS ====================
+
+// Show the total quantity sold for each product
+app.get("/api/reports/total-quantity-sold", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query(`
+        SELECT p.ProductID, p.ProductName,
+               COALESCE(SUM(s.QuantitySold), 0) AS TotalQuantitySold
+        FROM Products p
+        LEFT JOIN Sales s ON p.ProductID = s.ProductID
+        GROUP BY p.ProductID, p.ProductName
+        ORDER BY p.ProductID
+    `);
+
+    res.json(rows);
+}));
+
+// Show the product with the most stock
+app.get("/api/reports/highest-stock", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query(`
+        SELECT * FROM Products
+        ORDER BY StockQuantity DESC
+        LIMIT 1
+    `);
+
+    res.json(rows[0] || null);
+}));
+
+// Find suppliers whose names start with F
+app.get("/api/reports/suppliers-starting-f", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query(
+        "SELECT * FROM Suppliers WHERE SupplierName LIKE 'F%'"
+    );
+
+    res.json(rows);
+}));
+
+// Find products that have not been sold
+app.get("/api/reports/products-never-sold", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query(`
+        SELECT p.*
+        FROM Products p
+        LEFT JOIN Sales s ON p.ProductID = s.ProductID
+        WHERE s.SaleID IS NULL
+    `);
+
+    res.json(rows);
+}));
+
+// Show each sale with the product name, quantity, and date
+app.get("/api/reports/sales-details", asyncHandler(async (req, res) => {
+    const [rows] = await pool.query(`
+        SELECT p.ProductName, s.QuantitySold, s.SaleDate
+        FROM Sales s
+        INNER JOIN Products p ON s.ProductID = p.ProductID
+        ORDER BY s.SaleDate
+    `);
+
+    res.json(rows);
+}));
+
+// Handle errors
+app.use((error, req, res, next) => {
+    console.error(error.message);
+    res.status(500).json({ message: "Server error.", error: error.message });
+});
+
+const PORT = Number(process.env.PORT || 3000);
+
+connectDatabase()
+    .then(() => {
+        app.listen(PORT, () => {
+            console.log(`Server running at http://localhost:${PORT}`);
+        });
+    })
+    .catch((error) => {
+        console.error("Could not start the server:", error.message);
+        process.exit(1);
+    });
+
+
+================================================================================
+FILE: sql/musicana_schema.sql
+================================================================================
+
+CREATE DATABASE IF NOT EXISTS Musicana;
+USE Musicana;
+
+CREATE TABLE Musician (
+    MusicianID INT PRIMARY KEY,
+    Name VARCHAR(100) NOT NULL,
+    Street VARCHAR(100),
+    City VARCHAR(100),
+    Phone VARCHAR(20)
+);
+
+CREATE TABLE Instrument (
+    InstrumentName VARCHAR(100) PRIMARY KEY,
+    MusicalKey VARCHAR(30) NOT NULL
+);
+
+CREATE TABLE Album (
+    AlbumID INT PRIMARY KEY,
+    Title VARCHAR(150) UNIQUE NOT NULL,
+    CopyrightDate DATE,
+    ProducerID INT NOT NULL,
+    FOREIGN KEY (ProducerID) REFERENCES Musician(MusicianID)
+);
+
+CREATE TABLE Song (
+    SongID INT PRIMARY KEY AUTO_INCREMENT,
+    Title VARCHAR(150) UNIQUE NOT NULL,
+    Author VARCHAR(100) NOT NULL,
+    AlbumID INT NOT NULL,
+    FOREIGN KEY (AlbumID) REFERENCES Album(AlbumID)
+);
+
+-- A musician can play more than one instrument, and an instrument can belong to many musicians.
+CREATE TABLE MusicianInstrument (
+    MusicianID INT NOT NULL,
+    InstrumentName VARCHAR(100) NOT NULL,
+    PRIMARY KEY (MusicianID, InstrumentName),
+    FOREIGN KEY (MusicianID) REFERENCES Musician(MusicianID),
+    FOREIGN KEY (InstrumentName) REFERENCES Instrument(InstrumentName)
+);
+
+-- A musician can perform many songs, and a song can be performed by many musicians.
+CREATE TABLE MusicianSong (
+    MusicianID INT NOT NULL,
+    SongID INT NOT NULL,
+    PRIMARY KEY (MusicianID, SongID),
+    FOREIGN KEY (MusicianID) REFERENCES Musician(MusicianID),
+    FOREIGN KEY (SongID) REFERENCES Song(SongID)
+);
+
+
+================================================================================
+FILE: sql/part2_mapping.sql
+================================================================================
+
+CREATE DATABASE IF NOT EXISTS Part2Mapping;
+USE Part2Mapping;
+
+CREATE TABLE Users (
+    id INT PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    firstName VARCHAR(100),
+    lastName VARCHAR(100),
+    role VARCHAR(50),
+    password VARCHAR(255)
+);
+
+-- A user can have more than one phone number, so phone numbers go in a separate table.
+CREATE TABLE UserPhones (
+    userId INT NOT NULL,
+    phone VARCHAR(30) NOT NULL,
+    PRIMARY KEY (userId, phone),
+    FOREIGN KEY (userId) REFERENCES Users(id)
+);
+
+CREATE TABLE Products (
+    id INT PRIMARY KEY,
+    name VARCHAR(150) NOT NULL,
+    stock INT NOT NULL DEFAULT 0,
+    price DECIMAL(10,2) NOT NULL,
+    isDeleted BOOLEAN NOT NULL DEFAULT FALSE,
+    userId INT NOT NULL,
+    FOREIGN KEY (userId) REFERENCES Users(id)
+);
+
+
+================================================================================
+FILE: sql/permissions.sql
+================================================================================
+
+-- Run this script using a MySQL admin account.
+-- Change this password before you run the script.
+CREATE USER IF NOT EXISTS 'store_manager'@'localhost'
+IDENTIFIED BY 'ChangeThisPassword123!';
+
+GRANT SELECT, INSERT, UPDATE ON store_db.* TO 'store_manager'@'localhost';
+
+-- Question 15: remove UPDATE permission.
+REVOKE UPDATE ON store_db.* FROM 'store_manager'@'localhost';
+
+-- Question 16: give DELETE permission on the Sales table.
+GRANT DELETE ON store_db.Sales TO 'store_manager'@'localhost';
+
+FLUSH PRIVILEGES;
+
+===
+FILE: bonus.txt
+================================================================================
+
+SELECT v.customer_id, COUNT(v.visit_id) AS count_no_trans
+FROM Visits v
+LEFT JOIN Transactions t
+    ON v.visit_id = t.visit_id
+WHERE t.transaction_id IS NULL
+GROUP BY v.customer_id;
